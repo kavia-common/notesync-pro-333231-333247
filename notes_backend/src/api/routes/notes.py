@@ -31,11 +31,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, delete as sa_delete
 from sqlalchemy.orm import selectinload
 
 from src.api.db.session import get_db
-from src.api.db.models import User, Note, Tag
+from src.api.db.models import User, Note, Tag, note_tags
 from src.api.auth.dependencies import get_current_user
 from src.api.schemas.notes import CreateNoteRequest, UpdateNoteRequest, NoteResponse
 
@@ -256,15 +256,21 @@ async def create_note(
     db.add(note)
     await db.flush()  # Get the note ID
 
-    # Resolve and associate tags
+    # Resolve and associate tags via the junction table directly
+    # This avoids the MissingGreenlet error that occurs when assigning
+    # to note.tags on a freshly-flushed object in an async context.
     if data.tags:
         tags = await _resolve_tags(db, data.tags, current_user.id)
-        note.tags = tags
+        if tags:
+            # Insert into the junction table directly to avoid lazy-load triggers
+            for tag in tags:
+                await db.execute(
+                    note_tags.insert().values(note_id=note.id, tag_id=tag.id)
+                )
 
     await db.commit()
-    await db.refresh(note)
 
-    # Reload with tags
+    # Reload note with tags eagerly loaded
     result = await db.execute(
         select(Note).options(selectinload(Note.tags)).where(Note.id == note.id)
     )
@@ -331,10 +337,20 @@ async def update_note(
     # Update timestamp
     note.updated_at = datetime.now(timezone.utc)
 
-    # Update tags if provided
+    # Update tags if provided — use junction table directly to avoid lazy-load issues
     if data.tags is not None:
         tags = await _resolve_tags(db, data.tags, current_user.id)
-        note.tags = tags
+
+        # Remove existing tag associations for this note
+        await db.execute(
+            sa_delete(note_tags).where(note_tags.c.note_id == note.id)
+        )
+
+        # Insert new tag associations
+        for tag in tags:
+            await db.execute(
+                note_tags.insert().values(note_id=note.id, tag_id=tag.id)
+            )
 
     await db.commit()
 

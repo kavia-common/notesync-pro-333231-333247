@@ -68,18 +68,32 @@ app = FastAPI(
     openapi_tags=openapi_tags,
 )
 
-# CORS configuration — reads from environment with sensible defaults
+# ---------------------------------------------------------------------------
+# CORS configuration
+# ---------------------------------------------------------------------------
+# Reads allowed origins from ALLOWED_ORIGINS env var (comma-separated).
+# Also dynamically includes FRONTEND_URL and SITE_URL if set.
+# This ensures the frontend preview can always reach the backend.
+# ---------------------------------------------------------------------------
 allowed_origins_str = os.getenv(
     "ALLOWED_ORIGINS",
     "http://localhost:3000,http://localhost:4000",
 )
 allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
 
+# Also include FRONTEND_URL and SITE_URL if they are set (common deployment patterns)
+for env_key in ("FRONTEND_URL", "SITE_URL"):
+    extra_origin = os.getenv(env_key, "").strip()
+    if extra_origin and extra_origin not in allowed_origins:
+        allowed_origins.append(extra_origin)
+
 allowed_methods_str = os.getenv("ALLOWED_METHODS", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
 allowed_methods = [m.strip() for m in allowed_methods_str.split(",") if m.strip()]
 
 allowed_headers_str = os.getenv("ALLOWED_HEADERS", "Content-Type,Authorization,X-Requested-With")
 allowed_headers = [h.strip() for h in allowed_headers_str.split(",") if h.strip()]
+
+logger.info("CORS allowed origins: %s", allowed_origins)
 
 app.add_middleware(
     CORSMiddleware,
@@ -90,9 +104,9 @@ app.add_middleware(
 )
 
 # Import and mount route modules
-from src.api.routes.auth import router as auth_router
-from src.api.routes.notes import router as notes_router
-from src.api.routes.tags import router as tags_router
+from src.api.routes.auth import router as auth_router  # noqa: E402
+from src.api.routes.notes import router as notes_router  # noqa: E402
+from src.api.routes.tags import router as tags_router  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(notes_router)
